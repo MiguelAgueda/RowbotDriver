@@ -1,49 +1,53 @@
 #include <Arduino.h>
 #include <Wire.h>
 
+int loop_counter = 0;
+unsigned long time_now = 0;
+
 // Bytes coming from RockPi or a drive-manager device.
 #define ADDR 0x04 // Address for this device over I2C.
+#define BAUD 9600
 
-// Define pinouts
-#define DriveEn 2
-#define SteerEn 3
-#define DriveDir 4
-#define SteerDir 5
-#define DrivePWM 10
-#define SteerPWM 11
-#define SteerPot A0
+// Pinouts
+const int DriveEn = 3;
+const int SteerEn = 2;
+const int DriveDir = 5;
+const int SteerDir = 4;
+const int DrivePWM = 11;
+const int SteerPWM = 10;
+const int SteerPot = A0;
 
 // Variables for motor control.
-const int DriveAcceleration = 10; // Delay for controlling acceleration.
-const int SteerAcceleration = 5;  // Delay for controlling acceleration.
-int DrivePWMValue = 0;            // PWM value for speed control.
-int SteerPWMValue = 0;            // PWM value for speed control.
-int SteerPotValue = 882;                // potentiometer reading from steering column.
-const int MinSteerAngle = 514;    // Lower limit for steering pot value.
+const unsigned long DriveAcceleration = 250 ; // Delay (ms) for controlling acceleration.
+const unsigned long SteerAcceleration = 5;  // Delay (ms) for controlling acceleration.
+int RightTurnPWM = 0;
+int LeftTurnPWM = 0;
+int ForwardPWM = 0;
+int BackwardPWM = 0;
+int SteerPotValue = 882;          // potentiometer reading from steering column.
+const int MinSteerAngle = 666;    // Lower limit for steering pot value.
 const int MidSteerAngle = 882;    // Value when wheels are pointed straight.
-const int MaxSteerAngle = 1024;   // Upper limit for steering pot value.
-
-// bool forwardsPressed = false;
-// bool backwardsPressed = false;
-// bool rightPressed = false;
-// bool leftPressed = false;
+const int MaxSteerAngle = 1000;    // Upper limit for steering pot value.
+const int SteeringDeviation = 10; // Deviation allowed from center of steering.
 
 // Byte communication code.
-int incomingByte;
-#define FORWARD_FLAG 2
-#define BACKWARD_FLAG 3
-#define STOP_FLAG 4
-#define LEFT_FLAG 5
-#define RIGHT_FLAG 6
-#define CENTER_FLAG 7
-// const int FORWARDS_PRESSED = 1;
-// const int FORWARDS_RELEASED = 2;
-// const int BACKWARDS_PRESSED = 3;
-// const int BACKWARDS_RELEASED = 4;
-// const int RIGHT_PRESSED = 5;
-// const int RIGHT_RELEASED = 6;
-// const int LEFT_PRESSED = 7;
-// const int LEFT_RELEASED = 8;
+int STEERING_INSTR;
+int DRIVE_INSTR;
+#define FORWARD_CODE 2
+#define BACKWARD_CODE 3
+#define STOP_CODE 4
+#define LEFT_CODE 5
+#define RIGHT_CODE 6
+#define CENTER_CODE 7
+#define TERMINATE_CODE 254
+
+bool FORWARD_FLAG = false;
+bool BACKWARD_FLAG = false;
+bool STOP_FLAG = false;
+bool RIGHT_FLAG = false;
+bool LEFT_FLAG = false;
+bool CENTER_FLAG = false;
+bool PROGRAM_STOPPED = true; // Start with program waiting for 'go.'
 
 void initOutputs()
 {
@@ -58,11 +62,53 @@ void initOutputs()
   pinMode(SteerPot, INPUT);
 }
 
-void increment(int valToIncrement)
+int increment(int returnVal, int incrementLimit)  // Increment and return any number less than 254.
+{
+  if (returnVal < incrementLimit)
+    return ++returnVal;
+  else
+    return returnVal;
+  
+}
+
+void handleIncrementOf(char varToIncrement)
 {
   // Increment parameter value by one.
-  if (valToIncrement < 255)
-    valToIncrement++;
+  switch (varToIncrement)
+  {
+  case 'f': // Increment ForwardPWM.
+  {
+    BackwardPWM = 0;
+    ForwardPWM = increment(ForwardPWM, 65);
+    break;
+  }
+  case 'b':
+  {
+    ForwardPWM = 0;
+    BackwardPWM = increment(BackwardPWM, 100);
+    break;
+  }
+  case 'l': // Increment LeftTurnPWM.
+  {
+    RightTurnPWM = 0;
+    LeftTurnPWM = increment(LeftTurnPWM, 255);
+    break;
+    // LeftTurnPWM = incrementor(LeftTurnPWM);
+  }
+  case 'r':
+  {
+    LeftTurnPWM = 0;
+    RightTurnPWM = increment(RightTurnPWM, 255);
+    break;
+  }
+  }  // End switch-statement.
+}
+
+void stopSteering()
+{
+  digitalWrite(SteerEn, LOW);
+  digitalWrite(SteerDir, LOW);
+  analogWrite(SteerPWM, 0);
 }
 
 void moveForwards()
@@ -70,9 +116,14 @@ void moveForwards()
   // Forward signal to motor driver.
   digitalWrite(DriveEn, HIGH);
   digitalWrite(DriveDir, HIGH);
-  increment(DrivePWMValue);
-  analogWrite(DrivePWM, DrivePWMValue);
-  delay(DriveAcceleration);
+  // Check if enough time has passed to increment PWM value.
+  if (millis() > time_now + DriveAcceleration)
+  {
+    time_now = millis();
+    handleIncrementOf('f');
+  }
+
+  analogWrite(DrivePWM, ForwardPWM);
 }
 
 void moveBackwards()
@@ -80,9 +131,14 @@ void moveBackwards()
   // Backward signal to motor driver.
   digitalWrite(DriveEn, HIGH);
   digitalWrite(DriveDir, LOW);
-  increment(DrivePWMValue);
-  analogWrite(DrivePWM, DrivePWMValue);
-  delay(DriveAcceleration);
+  // Check if enough time has passed to increment PWM value.
+  if (millis() > time_now + DriveAcceleration)
+  {
+    time_now = millis();
+    handleIncrementOf('b');
+  }
+
+  analogWrite(DrivePWM, BackwardPWM);
 }
 
 void turnRight()
@@ -90,12 +146,22 @@ void turnRight()
   // Right turn signal to motor driver.
   if (analogRead(SteerPot) <= MaxSteerAngle) // If wheels not at max:
   {
+    Serial.println("Wheels not at max, turning right!");
     digitalWrite(SteerEn, HIGH);
     digitalWrite(SteerDir, HIGH);
-    increment(SteerPWMValue);
-    analogWrite(SteerPWM, SteerPWMValue);
-    delay(SteerAcceleration);
-  }
+    // Check if enough time has passed to increment PWM value.
+    if (millis() > time_now + SteerAcceleration)
+    {
+      time_now = millis();
+      handleIncrementOf('r');
+    }
+
+    analogWrite(SteerPWM, RightTurnPWM);
+
+  } // End if-statement.
+  else
+    stopSteering();
+
 }
 
 void turnLeft()
@@ -103,112 +169,220 @@ void turnLeft()
   // Left turn signal to motor driver.
   if (analogRead(SteerPot) >= MinSteerAngle) // If wheels not at min:
   {
+    Serial.println("Wheels not at min, turning left!");
     digitalWrite(SteerEn, HIGH);
     digitalWrite(SteerDir, LOW);
-    increment(SteerPWMValue);
-    analogWrite(SteerPWM, SteerPWMValue);
-    delay(SteerAcceleration);
-  }
+    // Check if enough time has passed to increment PWM value.
+    if (millis() > time_now + SteerAcceleration)
+    {
+      time_now = millis();
+      handleIncrementOf('l');
+    }
+
+    analogWrite(SteerPWM, LeftTurnPWM);
+  } // End if-statement.
+  else
+    stopSteering();
+  
 }
 
 void resetSteering()
 {
   // Center wheels when not turning left or right.
   int SteerPotReading = analogRead(SteerPot);
-  if (SteerPotReading < MidSteerAngle)
+  if (SteerPotReading < MidSteerAngle - SteeringDeviation)
     turnRight();
-  else if (SteerPotReading > MidSteerAngle)
+  else if (SteerPotReading > MidSteerAngle + SteeringDeviation)
     turnLeft();
+
+  else // Stop steering.
+  {
+    Serial.println("Steering Centered, Now Stopping.");
+    digitalWrite(SteerEn, LOW);
+    digitalWrite(SteerDir, LOW);
+    analogWrite(SteerPWM, 0);
+  }
+
+  Serial.println("(STEERING RESET)");
 }
 
-void resetEngine()
+void resetDrive()
 {
   // Stop drive motor when not going forwards or backwards.
   digitalWrite(DriveEn, LOW);
   digitalWrite(DriveDir, LOW);
   analogWrite(DrivePWM, 0);
-  DrivePWMValue = 0;
+}
+
+void emergencyStop()
+{
+  digitalWrite(DriveEn, LOW);
+  digitalWrite(SteerEn, LOW);
+  digitalWrite(DriveDir, LOW);
+  digitalWrite(SteerDir, LOW);
+  analogWrite(DrivePWM, 0);
+  analogWrite(SteerPWM, 0);
 }
 
 void handleIncomingByte()
 {
+
+  // SteerPotValue = analogRead(SteerPot);  // Save current potentiometer reading.
   // Use truth values from handleIncomingByte to control motor driver.
-  if (incomingByte == FORWARD_FLAG)
+  if (DRIVE_INSTR == FORWARD_CODE)
+  {
+    Serial.println("Going Forwards");
     moveForwards();
-  else if (incomingByte == BACKWARD_FLAG)
+  }
+  else if (DRIVE_INSTR == BACKWARD_CODE)
+  {
+    Serial.println("Going Backwards");
     moveBackwards();
-  // else if (incomingByte == STOP_FLAG)
-  else
-    resetEngine();
+  }
+  else if (DRIVE_INSTR == STOP_CODE)
+  {
+    Serial.println("Resetting Engine");
+    resetDrive();
+  }
 
-  if (incomingByte == LEFT_FLAG)
+  if (STEERING_INSTR == LEFT_CODE)
+  {
+    Serial.println("Turning Left");
     turnLeft();
-  else if (incomingByte == RIGHT_FLAG)
+  }
+  else if (STEERING_INSTR == RIGHT_CODE)
+  {
+    Serial.println("Turning Right");
     turnRight();
-  // else if (incomingByte == CENTER_FLAG)
-  else
+  }
+  else if (STEERING_INSTR == CENTER_CODE)
+  {
+    Serial.println("Resetting Steering");
     resetSteering();
+  }
 
-  // Set truth value corresponding to key pressed.
-  // if (incomingByte == FORWARDS_PRESSED)
-  //   forwardsPressed = true;
-  //   backwardsPressed = false;
-  // else if (incomingByte == BACKWARDS_PRESSED)
-  //   backwardsPressed = true;
-  //   forwardsPressed = false;
-
-  // if (incomingByte == FORWARDS_RELEASED)
-  //   forwardsPressed = false;
-  // else if (incomingByte == BACKWARDS_RELEASED)
-  //   backwardsPressed = false;
-
-  // if (incomingByte == RIGHT_PRESSED)
-  //   rightPressed = true;
-  //   leftPressed = false;
-  // else if (incomingByte == LEFT_PRESSED)
-  //   leftPressed = true;
-  //   rightPressed = false;
-
-  // if (incomingByte == RIGHT_RELEASED)
-  //   rightPressed = false;
-  // else if (incomingByte == LEFT_RELEASED)
-  //   leftPressed = false;
+  if ((STEERING_INSTR == TERMINATE_CODE) && (DRIVE_INSTR == TERMINATE_CODE))
+    Serial.println("Emergency Stop Initiated");
+  emergencyStop();
 }
 
-// void handlePinOutputs()
-// {
-// if (forwardsPressed)
-//   moveForwards();
-// else if (backwardsPressed)
-//   moveBackwards();
-// else
-//   resetEngine();
-
-// if (rightPressed)
-//   turnRight();
-// else if (leftPressed)
-//   turnLeft();
-// else
-//   resetSteering();
-// }
+void readInInstr(int numBytes)
+{
+  if (numBytes == 3)
+  {
+    if (Wire.read() == 0)
+    {                               // First byte should be 0,
+      STEERING_INSTR = Wire.read(); // followed by steering byte,
+      DRIVE_INSTR = Wire.read();    // then drive byte.
+      Serial.print("STEERING_INSTR: ");
+      Serial.println(STEERING_INSTR);
+    }
+  }
+}
 
 void receiveEvent(int numBytes)
 {
-  // Set value of incomingByte to the received byte.
-  incomingByte = Wire.read();
+  readInInstr(numBytes);
+  // If terminate signal is not received;
+  if ((STEERING_INSTR == TERMINATE_CODE) || (DRIVE_INSTR == TERMINATE_CODE))
+  {
+    Serial.println("\nTermination Signal Received.");
+    emergencyStop();
+    FORWARD_FLAG = false;
+    BACKWARD_FLAG = false;
+    STOP_FLAG = false;
+    RIGHT_FLAG = false;
+    LEFT_FLAG = false;
+    CENTER_FLAG = false;
+    PROGRAM_STOPPED = true;
+  }
+  else
+  {
+    PROGRAM_STOPPED = false;
+    if (STEERING_INSTR == RIGHT_CODE)
+    {
+      RIGHT_FLAG = true;
+      LEFT_FLAG = false;
+      CENTER_FLAG = false;
+    }
+    else if (STEERING_INSTR == LEFT_CODE)
+    {
+      RIGHT_FLAG = false;
+      LEFT_FLAG = true;
+      CENTER_FLAG = false;
+    }
+    else if (STEERING_INSTR == CENTER_CODE)
+    {
+      RIGHT_FLAG = false;
+      LEFT_FLAG = false;
+      CENTER_FLAG = true;
+    }
+
+    if (DRIVE_INSTR == FORWARD_CODE)
+    {
+      FORWARD_FLAG = true;
+      BACKWARD_FLAG = false;
+      STOP_FLAG = false;
+    }
+    else if (DRIVE_INSTR == BACKWARD_CODE)
+    {
+      FORWARD_FLAG = false;
+      BACKWARD_FLAG = true;
+      STOP_FLAG = false;
+    }
+    else if (DRIVE_INSTR == STOP_CODE)
+    {
+      FORWARD_FLAG = false;
+      BACKWARD_FLAG = false;
+      STOP_FLAG = true;
+    }
+  }
+}
+
+void handlePinOutputs()
+{
+  if (FORWARD_FLAG)
+    moveForwards();
+  else if (BACKWARD_FLAG)
+    moveBackwards();
+  else if (STOP_FLAG)
+    resetDrive();
+
+  if (LEFT_FLAG)
+    turnLeft();
+  else if (RIGHT_FLAG)
+    turnRight();
+  else if (CENTER_FLAG)
+    resetSteering();
+}
+
+void printTruthValues()
+{
+  Serial.print("FWD: ");
+  Serial.println(FORWARD_FLAG);
+  Serial.print("BWD: ");
+  Serial.println(BACKWARD_FLAG);
+  Serial.print("CNT: ");
+  Serial.println(CENTER_FLAG);
 }
 
 void setup()
 {
-  Serial.begin(9600);
-  initOutputs();                // Initiate output pins.
-  Wire.begin(ADDR);             // Join I2C bus on address ADDR.
+  Serial.begin(BAUD);
+  initOutputs();    // Initiate output pins.
+  Wire.begin(ADDR); // Join I2C bus on address ADDR.
+  Serial.println("Connected \nProgram Ready");
   Wire.onReceive(receiveEvent); // Function to call when byte is received.
 }
 
 void loop()
 {
-  Serial.println(incomingByte);
-  handleIncomingByte();
-  // handlePinOutputs();
+  // handleIncomingByte();
+  while (!PROGRAM_STOPPED)
+  {
+    handlePinOutputs();
+    Serial.print("Potentiometer Value: ");
+    Serial.println(analogRead(SteerPot));
+    // printTruthValues();
+  }
 }
