@@ -1,35 +1,15 @@
-#include <Wire.h>
-#include <header.h>
+#include 'header.h'
 #include <Driver.h>
 #include <RemoteControl.h>
+#include <I2CComm.h>
 
-#define ADDR 0x04 // Address for this device over I2C.
 const int BAUD = 9600;
-// Radio_Package data;
-
-void handleIncomingByte(int numBytes)
-{
-    Serial.println("Bytes Received.");
-    if (numBytes == 3)
-    {
-        if (Wire.read() == 0) // First byte sent should be 0.
-        {
-            // THETA = Wire.read();
-            // DRIVE_INSTR = Wire.read();
-            // Serial.println(DRIVE_INSTR);
-            // Serial.println(THETA);
-        }
-        else
-            stop();
-    }
-}
 
 void setup()
 {
     Serial.begin(BAUD);
     Serial.println("Program Ready\n");
-    Wire.begin(ADDR);
-    Wire.onReceive(handleIncomingByte);
+
     setup_radio();
 }
 
@@ -41,12 +21,22 @@ void loop()
         int8_t joystick_x = map(current_data.j1PotX, 0, 255, -127, 127);
         int8_t joystick_y = map(current_data.j1PotY, 0, 255, -127, 127);
 
+        if (current_data.tSwitch2) // Save scan data.
+        {
+            GLOBAL_OUT_PACK.SaveScanData = true;
+            GLOBAL_OUT_PACK.joystick_x = joystick_x;
+            GLOBAL_OUT_PACK.joystick_y = joystick_y;
+        }
+        else
+        {
+            GLOBAL_OUT_PACK.SaveScanData = false;
+        }
+
+        GLOBAL_OUT_PACK.DriveAutonomously = false;
         drive(joystick_x, joystick_y); // Drive using joystick position.
     }
     else // Drive autonomously.
     {
-        // Send autonomous flag to RPi.
-        // Begin accepting driving commands based on LiDAR readings.
-        // drive(current_data.j1PotX, current_data.j1PotY);
+        GLOBAL_OUT_PACK.DriveAutonomously = true;
     }
 }
