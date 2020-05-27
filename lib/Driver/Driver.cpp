@@ -49,11 +49,11 @@ void calculatePinouts()
     uint8_t right_side_dir = isPositive(R_PWM_VAL);
     uint8_t left_side_dir = isPositive(L_PWM_VAL);
 
-    // Debugging.
-    Serial.print("Left DIR: ");
-    Serial.print(left_side_dir);
-    Serial.print("\tRight DIR: ");
-    Serial.println(right_side_dir);
+    // // Debugging.
+    // Serial.print("Left DIR: ");
+    // Serial.print(left_side_dir);
+    // Serial.print("\tRight DIR: ");
+    // Serial.println(right_side_dir);
     R_PWM_VAL = abs(R_PWM_VAL);
     L_PWM_VAL = abs(L_PWM_VAL);
     // Handle outputs for right wheels.
