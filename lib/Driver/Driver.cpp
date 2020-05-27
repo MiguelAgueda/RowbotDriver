@@ -44,7 +44,7 @@ void calculatePinouts()
     Perform proper pinout operations depending on calculated PWM values.
     For positive PWM values, the direction is meant to be forward.
     For negative PWM values, the direction is meant to be backward.
-    The DIR value follows the following key; 0: Backwards, 1: Forwards.
+    The DIR value follows the following key; 1: Forwards, 0: Backwards.
     */
     uint8_t right_side_dir = isPositive(R_PWM_VAL);
     uint8_t left_side_dir = isPositive(L_PWM_VAL);
